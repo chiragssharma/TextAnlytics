@@ -1,0 +1,523 @@
+---
+title: "Oneplus_text_analytics"
+author: "Chirag Sharma"
+date: "7/8/2019"
+output: word_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## R Markdown
+
+### Tweet cleaning code
+
+```{r}
+library(stringr)
+tweets_oneplus7 <- read.csv("oneplus71.csv", header = FALSE, col.names = c("Time", "Tweet"))
+
+clean_tweet_oneplus = gsub("&amp", "", tweets_oneplus7$Tweet)
+
+clean_tweet_oneplus = gsub("(RT|via)((?:\\b\\W*@\\w+)+)", "", clean_tweet_oneplus)
+
+clean_tweet_oneplus = gsub("\\x[a-z0-9]", "", clean_tweet_oneplus)
+
+clean_tweet_oneplus = gsub("@\\w+", "", clean_tweet_oneplus)
+
+clean_tweet_oneplus = gsub("x[a-z0-9].{1}", "", clean_tweet_oneplus)
+
+clean_tweet_oneplus = gsub("[[:punct:]]", "", clean_tweet_oneplus)
+
+clean_tweet_oneplus = gsub("[[:digit:]]", "", clean_tweet_oneplus)
+
+clean_tweet_oneplus = gsub("http\\w+", "", clean_tweet_oneplus)
+
+clean_tweet_oneplus = gsub("[ \t]{2,}", "", clean_tweet_oneplus)
+
+clean_tweet_oneplus = gsub("^\\s+|\\s+$", "", clean_tweet_oneplus) 
+
+
+#get rid of unnecessary spaces
+clean_tweet_oneplus <- str_replace_all(clean_tweet_oneplus," "," ")
+# Take out retweet header, there is only one
+clean_tweet_oneplus <- str_replace(clean_tweet_oneplus,"RT @[a-z,A-Z]*: ","")
+# Get rid of hashtags
+clean_tweet_oneplus <- str_replace_all(clean_tweet_oneplus,"#[a-z,A-Z]*","")
+# Get rid of references to other screennames
+clean_tweet_oneplus <- str_replace_all(clean_tweet_oneplus,"@[a-z,A-Z]*","")
+clean_tweet_oneplus <- gsub("^.", "", clean_tweet_oneplus)
+head(clean_tweet_oneplus)
+df2 <- data.frame(clean_tweet_oneplus)
+tweets_oneplus7["clean_tweet"] = df2$clean_tweet
+write.csv(clean_tweet_oneplus, "clean_tweet_oneplus7.csv")
+```
+
+
+Oneplus and Samsung Amazon Text mining
+```{r libraries}
+rm(list=ls()) 
+suppressPackageStartupMessages({
+ library(tm);
+ library(tidyverse);
+ library(tidytext);
+ library(wordcloud);
+ library(tidyr)
+ library(igraph);
+ library(lubridate)
+ library(ggplot2)})
+
+```
+
+## Read Oneplus and Samsung Amazon reviews
+
+
+```{r read data, echo=TRUE}
+## Read Oneplus review from CSV files
+oneplus = read.csv('Clubbed_Oneplus.csv',stringsAsFactors=FALSE)  
+head(oneplus, 5)   # view top 5 lines
+oneplus$Date.of.review = dmy(oneplus$Date.of.review)
+
+## Read Samsung review from CSV files
+samsung = read.csv('Clubbed_Samsung data.csv',stringsAsFactor=FALSE)
+head(samsung, 5)
+samsung$Date.of.review = dmy(samsung$Date.of.review)
+
+
+```
+## Create function to clean the reviews from stop words
+```{r corpus clean}
+
+clean_ds = function(reviews,                    # reviews=text_corpus
+		remove_numbers=TRUE, 	    # whether to drop numbers? Default is TRUE	
+		remove_stopwords=TRUE)	    # whether to drop stopwords? Default is TRUE
+
+ { 
+  reviews  =  gsub("<.*?>", " ", reviews)               # regex for removing HTML tags
+  reviews  =  iconv(reviews, "latin1", "ASCII", sub="") # Keep only ASCII characters
+  reviews  =  gsub("[^[:alnum:]]", " ", reviews)        # keep only alpha numeric 
+  reviews  =  tolower(reviews)                          # convert to lower case characters
+
+  if (remove_numbers) { reviews  =  removeNumbers(reviews)}    # removing numbers
+
+  reviews  =  stripWhitespace(reviews)                  # removing white space
+  reviews  =  gsub("^\\s+|\\s+$", "", reviews)          # remove leading and trailing white space. Note regex usage
+
+ # evlauate condn
+ if (remove_stopwords){
+
+   # read std stopwords list from my git
+   stpw1 = readLines('https://raw.githubusercontent.com/himnsuk/Vim-Config/master/stopwords.txt')
+ 
+   # tm package stop word list; tokenizer package has the same name function, hence 'tm::'
+   stpw2 = tm::stopwords('english')      
+   stpw3 = c('oneplus','amazon','phone','mobile','1','2','3','5','6','7','samsung','galaxy','onepluspro','giveaway','deal','win','contest','almond','tempered','protector')
+   comn  = unique(c(stpw1, stpw2,stpw3))         # Union of the two lists
+   stopwords = unique(gsub("'"," ",comn))  # final stop word list after removing punctuation
+
+   # removing stopwords created above
+   x  =  removeWords(reviews,stopwords)        	}  # if condn ends
+
+  x  =  stripWhitespace(reviews)                  # removing white space
+
+  return(x) }
+```
+## Clean Oneplus and Samsung Amazon reviews
+```{r execute_clean_function}
+system.time({ oneplus_clean =  clean_ds(oneplus$Review, remove_numbers=TRUE) })
+system.time({ samsung_clean =  clean_ds(samsung$Review, remove_numbers=TRUE) })
+```
+
+## Function to build DTM TF or TFIDF
+```{r}
+dtm_build <- function(raw_corpus, tfidf=FALSE)
+ {  				# func opens
+
+ 
+ # converting raw corpus to tibble to tidy DF
+ textdf = data_frame(text = raw_corpus);    textdf  
+
+ tidy_df = textdf %>%   
+                    mutate(doc = row_number()) %>%
+                    unnest_tokens(word, text) %>% 
+                    anti_join(stop_words) %>%
+                    group_by(doc) %>%
+                    count(word, sort=TRUE)
+ tidy_df
+	
+ # evaluating IDF wala DTM
+ if (tfidf == "TRUE") {
+	textdf1 = tidy_df %>% 
+			group_by(doc) %>% 
+			count(word, sort=TRUE) %>% ungroup() %>%
+			bind_tf_idf(word, doc, n) %>%   # 'nn' is default colm name
+			rename(value = tf_idf)} else { textdf1 = tidy_df %>% rename(value = n)  } 
+
+ textdf1
+
+ dtm = textdf1 %>% cast_sparse(doc, word, value);    dtm[1:9, 1:9]
+ 
+ # order rows and colms putting max mass on the top-left corner of the DTM
+ colsum = apply(dtm, 2, sum)    
+ col.order = order(colsum, decreasing=TRUE)
+ row.order = order(rownames(dtm) %>% as.numeric())
+
+ dtm1 = dtm[row.order, col.order];    dtm1[1:8,1:8]
+
+ return(dtm1)  }   # func ends
+```
+
+
+## Build TF and TFIDF DTM for Oneplus and Samsung
+```{r}
+ system.time({ dtm_oneplus_tf = dtm_build(oneplus_clean) })    
+ system.time({ dtm_oneplus_idf = dtm_build(oneplus_clean, tfidf=TRUE) })  
+ system.time({ dtm_samsung_tf = dtm_build(samsung_clean) })    
+ system.time({ dtm_samsung_idf = dtm_build(samsung_clean, tfidf=TRUE) })  
+
+```
+
+## Wordcloud function
+```{r}
+build_wordcloud <- function(dtm, 
+                                max.words1=150,     # max no. of words to accommodate
+                                min.freq=5,       # min.freq of words to consider
+                                plot.title="wordcloud"){          # write within double quotes
+
+ 
+ 
+ if (ncol(dtm) > 20000){   # if dtm is overly large, break into chunks and solve
+
+ tst = round(ncol(dtm)/100)  # divide DTM's cols into 100 manageble parts
+ 
+ a = rep(tst,99)
+ 
+ b = cumsum(a);rm(a)
+ 
+ b = c(0,b,ncol(dtm))
+ print(b)
+
+ ss.col = c(NULL)
+ for (i in 1:(length(b)-1)) {
+  tempdtm = dtm[,(b[i]+1):(b[i+1])]
+  print(b[i])
+  #print(tempdtm)
+  s = colSums(as.matrix(tempdtm))
+  ss.col = c(ss.col,s)
+                            } # i loop ends
+ tsum = ss.col
+
+ } else { tsum = apply(dtm, 2, sum) }
+
+ tsum = tsum[order(tsum, decreasing = T)]       # terms in decreasing order of freq
+ #print(head(tsum));    #tail(tsum)
+
+ # windows()  # Opens a new plot window when active
+ wordcloud(names(tsum), tsum,     # words, their freqs 
+           scale = c(3.5, 0.5),     # range of word sizes
+           min.freq,                     # min.freq of words to consider
+           max.words = max.words1,       # max #words
+           colors = brewer.pal(8, "Dark2"))    # Plot results in a word cloud 
+   title(sub = plot.title)     # title for the wordcloud display
+
+    } # func ends
+
+ 
+```
+
+## Build Wordcloud for Oneplus and Samsung for both TF and TFIDF DTM
+```{r}
+system.time({ build_wordcloud(dtm_oneplus_tf, plot.title="Oneplus TF wordcloud") })   
+system.time({ build_wordcloud(dtm_oneplus_idf, plot.title="Oneplus IDF wordcloud") }) 
+system.time({ build_wordcloud(dtm_samsung_tf, plot.title="Samsung TF wordcloud") })   
+system.time({ build_wordcloud(dtm_samsung_idf, plot.title="Samsung IDF wordcloud") }) 
+
+```
+## Function for Co-occurence graph
+
+```{r COG_Function}
+distill.cog = function(dtm, # input dtm
+                       title="COG", # title for the graph
+                       central.nodes=4,    # no. of central nodes
+                       max.connexns = 5){  # max no. of connections  
+ 
+ # first convert dtm to an adjacency matrix
+ dtm1 = as.matrix(dtm)   # need it as a regular matrix for matrix ops like %*% to apply
+ adj.mat = t(dtm1) %*% dtm1    # making a square symmatric term-term matrix 
+ diag(adj.mat) = 0     # no self-references. So diag is 0.
+ a0 = order(apply(adj.mat, 2, sum), decreasing = T)   # order cols by descending colSum
+ mat1 = as.matrix(adj.mat[a0[1:50], a0[1:50]])
+
+  # now invoke network plotting lib igraph
+  library(igraph)
+
+  a = colSums(mat1) # collect colsums into a vector obj a
+  b = order(-a)     # nice syntax for ordering vector in decr order  
+  
+  mat2 = mat1[b, b]     # order both rows and columns along vector b  
+  diag(mat2) =  0
+  
+  ## +++ go row by row and find top k adjacencies +++ ##
+
+  wc = NULL
+  
+  for (i1 in 1:central.nodes){ 
+  #  print(mat2[i1,])
+    thresh1 = mat2[i1,][order(-mat2[i1, ])[max.connexns]]
+  #  print('****************')
+  #  print(thresh1)
+  #  print('****************')
+    mat2[i1, mat2[i1,] < thresh1] = 0   # neat. didn't need 2 use () in the subset here.
+    mat2[i1, mat2[i1,] > 0 ] = 1
+    word = names(mat2[i1, mat2[i1,] > 0])
+    mat2[(i1+1):nrow(mat2), match(word,colnames(mat2))] = 0
+    wc = c(wc, word)
+  } # i1 loop ends
+  
+  
+  mat3 = mat2[match(wc, colnames(mat2)), match(wc, colnames(mat2))]
+  ord = colnames(mat2)[which(!is.na(match(colnames(mat2), colnames(mat3))))]  # removed any NAs from the list
+  mat4 = mat3[match(ord, colnames(mat3)), match(ord, colnames(mat3))]
+
+  # building and plotting a network object
+  graph <- graph.adjacency(mat4, mode = "undirected", weighted=T)    # Create Network object
+  graph = simplify(graph) 
+  V(graph)$color[1:central.nodes] = "green"
+  V(graph)$color[(central.nodes+1):length(V(graph))] = "pink"
+
+  graph = delete.vertices(graph, V(graph)[ degree(graph) == 0 ]) # delete singletons?
+  
+  plot(graph, 
+       layout = layout.kamada.kawai, 
+       main = title)
+
+  } # distill.cog func ends
+```
+
+## Create Co-occurence graph for Samsung and Oneplus
+```{r }
+system.time({ distill.cog(dtm_oneplus_tf, "COG for Oneplus TF") })   
+ system.time({ distill.cog(dtm_oneplus_idf, "COG for Oneplus IDF", 5, 5) })   
+ system.time({ distill.cog(dtm_samsung_tf, "COG for Samsung TF") })
+```
+
+
+No of reviews by year and Ratings
+
+and Bing sentiment
+
+```{r}
+build_bing_sent <- function(df,txt='Bing Sentiment',txt2='Model'){
+
+plot(ggplot(df, aes(x=df$Rating.Out.of.5.)) +
+  geom_bar(fill ="#00AFBB") +
+  xlab("Rating") + ylab("Count") +
+  ggtitle(txt2) +
+  geom_text(stat="count",aes(label=..count..),vjust=-0.2))
+  
+#str(as.factor(year(oneplus$Date.of.review)))
+
+plot(ggplot(df, aes(x=df$Date.of.review)) +
+  geom_bar(fill ="#00AFBB") +
+  ggtitle(txt2) +
+  xlab("Year") + ylab("No of reviews"))
+
+
+ 
+df_tidy <- df %>%
+  unnest_tokens(word, Review) %>% #Break the review into individual words
+  anti_join(stop_words)
+head(df_tidy,5)
+ 
+df_bing <- df_tidy %>%
+  inner_join(get_sentiments("bing"))
+
+df_plot <- df_bing %>%
+  group_by(sentiment) %>%
+  summarise(word_count = n()) %>%
+  ungroup() %>%
+  mutate(sentiment = reorder(sentiment, word_count)) %>%
+  ggplot(aes(sentiment, word_count, fill = sentiment)) +
+  geom_col() +
+  guides(fill = FALSE) +
+  labs(x = NULL, y = "Word Count") +
+  scale_y_continuous(limits = c(0, 8000)) +
+  ggtitle(txt) +
+  coord_flip()
+
+plot(df_plot)
+
+df_pol_year <- df_bing %>%
+  count(sentiment, Date.of.review) %>%
+  spread(sentiment, n, fill = 0) %>%
+  mutate(polarity = positive - negative,
+    percent_positive = positive / (positive + negative) * 100)
+
+pol_over_time <- df_pol_year %>%
+  ggplot(aes(Date.of.review, polarity)) +
+  geom_col(fill="#00AFBB") +
+  xlab(NULL) + ylab(NULL) +
+  ggtitle("Polarity Over Time")
+
+
+rel_pol_over_time <- df_pol_year %>%
+  ggplot(aes(Date.of.review, percent_positive)) +
+  geom_col(fill="#00AFBB") +
+  xlab(NULL) + ylab(NULL) +
+  ggtitle("Percent +ive Over Time")
+
+plot(pol_over_time)
+plot(rel_pol_over_time)
+}
+str(oneplus)
+build_bing_sent(oneplus,txt2='Oneplus')
+build_bing_sent(samsung,txt2='Samsung')
+str(samsung)
+```
+
+
+
+```{r}
+## Read Oneplus twitter review
+oneplus_twt = read.csv('Oneplus7_clean_tweet.csv',stringsAsFactors=FALSE)  
+head(oneplus_twt, 5)   # view a few lines
+
+
+## Read Samsung twitter review
+samsung_twt = read.csv('galaxy10_clean_tweet.csv',stringsAsFactor=FALSE)
+head(samsung_twt, 5)
+
+
+clean.oneplus.twt = clean_ds(oneplus_twt$clean_tweet,remove_numbers=TRUE)
+
+
+dtm_oneplus_twt_tf = dtm_build(clean.oneplus.twt)
+dtm_oneplus_twt_idf = dtm_build(clean.oneplus.twt, tfidf=TRUE)  
+build_wordcloud(dtm_oneplus_twt_tf, plot.title="Oneplus Tweet TF wordcloud")
+build_wordcloud(dtm_oneplus_twt_idf, plot.title="Oneplus Tweet TF wordcloud")
+distill.cog(dtm_oneplus_twt_tf, "COG for Oneplus TF")
+distill.cog(dtm_oneplus_twt_idf, "COG for Oneplus TFIDF")
+clean.samsung.twt = clean_ds(samsung_twt$clean_tweet,remove_numbers=TRUE)
+
+
+dtm_samsung_twt_tf = dtm_build(clean.samsung.twt)
+build_wordcloud(dtm_samsung_twt_tf, plot.title="Samsung Tweet TF wordcloud")
+distill.cog(dtm_samsung_twt_tf, "COG for Oneplus TF")
+
+#system.time({ samsung_clean =  clean_ds(samsung$clean_tweet, remove_numbers=TRUE) })
+```
+
+
+```{r}
+# load packages
+
+lda_analysis <- function(passdf,txt='Model',k=4){
+
+library(SnowballC)
+library(topicmodels)
+library(ldatuning)
+
+
+passdfvs <- Corpus(VectorSource(passdf$Review))
+
+passdfvs <- tm_map(passdfvs,stemDocument)
+
+passdfvs <- tm_map(passdfvs, removePunctuation)
+passdfvs <- tm_map(passdfvs, removeNumbers)
+passdfvs <- tm_map(passdfvs, removeWords, stopwords('english'))
+passdfvs <- tm_map(passdfvs, stripWhitespace)
+
+removeSpecialChars <- function(x) gsub("[^a-zA-Z0-9 ]","",x)
+passdfvs <- tm_map(passdfvs, removeSpecialChars)
+
+passdfvs <- tm_map(passdfvs, content_transformer(tolower))
+myStopwords <- c('phone','can','say','samsung','said','will','like','oneplus','even','well','one', 'hour','is','may', 'also','get','take', 'well','now','new', 'use', 'the','galaxy')
+passdfvs <- tm_map(passdfvs, removeWords, myStopwords)
+
+passdfvs <- tm_map(passdfvs,stemDocument)
+
+dtmpassdf <- DocumentTermMatrix(passdfvs)
+
+row.total <- apply(dtmpassdf , 1, sum)
+dtmpassdf   <- dtmpassdf[row.total> 0, ]
+
+result <- FindTopicsNumber(
+  dtmpassdf,
+  topics = seq(from = 2, to = 15, by = 1),
+  metrics = c("Griffiths2004", "CaoJuan2009", "Arun2010", "Deveaud2014"),
+  method = "Gibbs",
+  control = list(seed = 1234),
+  mc.cores = 2L,
+  verbose = TRUE
+)
+
+
+FindTopicsNumber_plot(result)
+
+passdf_lda <- LDA(dtmpassdf, k , control = list(seed = 1234))
+
+passdf_lda_gamma <- tidy(passdf_lda, matrix = "gamma")
+glimpse(passdf_lda_gamma)
+passdf.classification <- passdf_lda_gamma %>%
+  top_n(1, gamma)
+
+passdf_topics <- tidy(passdf_lda, matrix = "beta")
+
+
+passdf_top_terms <- passdf_topics %>%
+  group_by(topic) %>%
+  top_n(10, beta) %>%
+  ungroup() %>%
+  arrange(topic, -beta)
+
+passdf_top_terms %>%
+  mutate(term = reorder(term, beta)) %>%
+  ggplot(aes(term, beta, fill = factor(topic))) +
+  geom_col(show.legend = FALSE) +
+  facet_wrap(~ topic, scales = "free") +
+  coord_flip() + ggtitle('Top terms in each LDA topic')
+
+}
+
+```
+
+
+```{r}
+lda_analysis(oneplus,k=4)
+lda_analysis(samsung,k=2)
+```
+
+### Google Trend
+
+```{r}
+trends_df <- read.csv("multiTimeline.csv", header = TRUE)
+summary(trends_df)
+colnames(trends_df)
+str(trends_df)
+trends_df$Day <- as.Date(trends_df$Day, "%d/%m/%y")
+str(trends_df)
+trends_df["Months"] <- as.Date(cut(trends_df$Day, breaks = "month"))
+
+ggplot(data=trends_df, aes(x = Day)) + 
+  geom_line(aes(y = galaxy.S10), color="#4285f4") +
+  geom_line(aes(y = galaxy.S10E), color = "#0f9d57") +
+  geom_line(aes(y = OnePlus.7), color = "#db4438") +
+  geom_line(aes(y = OnePlus.7.Pro), color="#f4b400")
+```
+
+
+### Google Trends 5 year
+```{r}
+trends_df2 <- read.csv("multiTimeline_5years.csv", header = TRUE)
+summary(trends_df2)
+colnames(trends_df2)
+str(trends_df2)
+trends_df2$Week <- as.Date(trends_df2$Week, "%d/%m/%y")
+str(trends_df2)
+
+ggplot(data=trends_df2, aes(x = Week)) + 
+  geom_line(aes(y = Samsung), color="#4285f4") +
+  geom_line(aes(y = OnePlus), color = "#0f9d57")
+```
+
+
